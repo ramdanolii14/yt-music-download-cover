@@ -1,38 +1,41 @@
-# YouTube to MP3 Downloader
+# YouTube Audio Downloader
 
-A simple Windows batch script that downloads audio from YouTube videos and converts them to MP3, with embedded thumbnail art. Just double-click, paste a link, and get your MP3.
+A Windows batch script that downloads audio from YouTube and converts it to MP3, FLAC, or WAV, complete with embedded thumbnail art and artist metadata pulled from the channel name. Just double-click and go.
 
 Built on top of [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 ## Features
 
 - Double-click to run, no command line typing needed
-- Downloads best available audio quality
-- Automatically converts to MP3
+- Automatic dependency checks (yt-dlp, ffmpeg, cookies.txt)
+- Auto-updates yt-dlp before every run
+- Choose output format: MP3, FLAC, or WAV
 - Embeds thumbnail as cover art
-- Uses browser cookies to bypass YouTube's bot detection
+- Embeds metadata (title, artist/album artist from channel name)
+- Single link or batch download from a `links.txt` file
+- Optional full playlist download
+- Automatic retries on failed requests
+- Errors logged to `download_log.txt` for easier troubleshooting
 
 ## Requirements
-
-Before using this script, make sure you have the following installed:
 
 1. **[yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)** - added to your system PATH
 2. **[FFmpeg](https://www.gyan.dev/ffmpeg/builds/)** - required for audio conversion and thumbnail embedding, also added to PATH
 3. **[Deno](https://deno.com/)** - required for yt-dlp to solve YouTube's JavaScript challenges
 
-Install Deno easily via winget:
+Install Deno via winget:
 
 ```
 winget install DenoLand.Deno
 ```
 
-Restart your terminal after installing Deno so it's recognized.
+Restart your terminal after installing Deno so it's recognized. The script checks for yt-dlp and ffmpeg automatically and will tell you if either is missing.
 
 ## Setup
 
 ### 1. Get `cookies.txt`
 
-YouTube requires sign-in verification for many downloads. You need to export your browser cookies:
+YouTube requires sign-in verification for many downloads. Export your browser cookies:
 
 1. Install the **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)** extension (works on Chrome, Brave, Edge)
 2. Go to [youtube.com](https://youtube.com) while logged into your account
@@ -43,35 +46,32 @@ YouTube requires sign-in verification for many downloads. You need to export you
 
 ### 2. Place files together
 
-Put these three files in the same folder:
-
 ```
 your-folder/
 ├── run.bat
 └── cookies.txt
 ```
 
-### 3. Run it
+### 3. (Optional) Batch downloads
 
-Double-click `run.bat`, paste the YouTube link when prompted, press Enter, and wait for the download to finish. Your MP3 will appear in the same folder.
+To download multiple videos in one run, create a `links.txt` file in the same folder with one YouTube link per line:
 
-## The Script
-
-`run.bat`:
-
-```bat
-@echo off
-title YouTube to MP3 Downloader
-cd /d "%~dp0"
-
-set /p ytlink="Masukin link YouTube: "
-
-yt-dlp --remote-components ejs:github --cookies cookies.txt %ytlink% --embed-thumbnail -f bestaudio --extract-audio --audio-format mp3 --audio-quality 0
-
-echo.
-echo Selesai! Cek folder ini untuk file mp3 nya.
-pause
 ```
+https://www.youtube.com/watch?v=xxxxxxxxxxx
+https://www.youtube.com/watch?v=yyyyyyyyyyy
+https://www.youtube.com/watch?v=zzzzzzzzzzz
+```
+
+### 4. Run it
+
+Double-click `run.bat` and follow the prompts:
+
+1. Choose your audio format (MP3 / FLAC / WAV)
+2. Choose single link or batch mode (`links.txt`)
+3. Choose whether to download the full playlist if the link is a playlist
+4. Paste your link (if single mode) and press Enter
+
+Your finished audio files will appear in the same folder.
 
 ## Troubleshooting
 
@@ -79,11 +79,12 @@ pause
 |---|---|
 | `Sign in to confirm you're not a bot` | Your `cookies.txt` is missing, expired, or wasn't exported while logged in. Re-export it. |
 | `Failed to decrypt with DPAPI` | Don't use `--cookies-from-browser` on Chrome; use the `cookies.txt` extension method instead. |
-| `Could not copy Chrome cookie database` | Close the browser completely (check Task Manager for background processes) before trying `--cookies-from-browser`, or just use `cookies.txt` instead. |
-| `Signature solving failed` / `n challenge solving failed` | Deno isn't installed, or its solver script hasn't been downloaded. Make sure `--remote-components ejs:github` is in the command and that you restarted your terminal after installing Deno. |
-| `HTTP Error 429: Too Many Requests` | You're being rate-limited. Wait a bit before retrying, or add `--sleep-requests 2` to the command. |
+| `Could not copy Chrome cookie database` | Close the browser completely (check Task Manager for background processes), or just use `cookies.txt` instead. |
+| `Signature solving failed` / `n challenge solving failed` | Deno isn't installed, or its solver script hasn't downloaded. Make sure `--remote-components ejs:github` is present and you restarted your terminal after installing Deno. |
+| `HTTP Error 429: Too Many Requests` | You're being rate-limited. Wait a bit before retrying; the script already retries automatically and adds delays between requests. |
+| Script exits immediately with a red `[ERROR]` message | Read the message — it tells you exactly which dependency or file is missing (yt-dlp, ffmpeg, or cookies.txt). |
 
-Cookies expire periodically (typically after a few weeks to months, or if you log out of your browser). If downloads suddenly stop working, re-export `cookies.txt`.
+Cookies expire periodically (typically after a few weeks to months, or if you log out of your browser). If downloads suddenly stop working, re-export `cookies.txt`. Check `download_log.txt` for detailed error output from any failed run.
 
 ## Disclaimer
 

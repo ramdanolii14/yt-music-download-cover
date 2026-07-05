@@ -10,8 +10,13 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.request
+import zipfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+FFMPEG_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+DENO_URL = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -86,6 +91,8 @@ class DownloaderApp:
         self.audio_format = tk.StringVar(value="mp3")
         self.playlist_mode = tk.StringVar(value="auto")
         self.restrict_filenames = tk.BooleanVar(value=True)
+        self.ffmpeg_path = tk.StringVar(value="")
+        self.deno_path = tk.StringVar(value="")
         self.is_downloading = False
 
         self._load_settings()
@@ -120,6 +127,14 @@ class DownloaderApp:
         if isinstance(data.get("restrict_filenames"), bool):
             self.restrict_filenames.set(data["restrict_filenames"])
 
+        ffmpeg_path = data.get("ffmpeg_path", "")
+        if ffmpeg_path and os.path.isfile(ffmpeg_path):
+            self.ffmpeg_path.set(ffmpeg_path)
+
+        deno_path = data.get("deno_path", "")
+        if deno_path and os.path.isfile(deno_path):
+            self.deno_path.set(deno_path)
+
     def _save_settings(self):
         data = {
             "output_dir": self.output_dir.get(),
@@ -127,6 +142,8 @@ class DownloaderApp:
             "audio_format": self.audio_format.get(),
             "playlist_mode": self.playlist_mode.get(),
             "restrict_filenames": self.restrict_filenames.get(),
+            "ffmpeg_path": self.ffmpeg_path.get(),
+            "deno_path": self.deno_path.get(),
         }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -212,24 +229,77 @@ class DownloaderApp:
         )
         ttk.Button(action_frame, text="Show Log", command=self._open_log_window).pack(side="left", padx=6)
 
+        setup_frame = ttk.Frame(self.root)
+        setup_frame.pack(fill="x", padx=10)
+        self.setup_btn = ttk.Button(setup_frame, text="Auto Setup (yt-dlp + ffmpeg + Deno)", command=self._auto_setup)
+        self.setup_btn.pack(side="left")
+
         self.status_label = ttk.Label(self.root, text="Checking dependencies...", foreground="gray")
-        self.status_label.pack(anchor="w", padx=12, pady=(0, 12))
+        self.status_label.pack(anchor="w", padx=12, pady=(6, 12))
 
     # ---------- Dependency checks ----------
+
+    def _has_ffmpeg(self):
+        if shutil.which("ffmpeg") is not None:
+            return True
+        path = self.ffmpeg_path.get()
+        return bool(path) and os.path.isfile(path)
+
+    def _has_deno(self):
+        if shutil.which("deno") is not None:
+            return True
+        path = self.deno_path.get()
+        return bool(path) and os.path.isfile(path)
+
+    def _download_portable_tool(self, url, subfolder, exe_name, label):
+        """Download a zipped portable tool, extract it, and return the path to its executable."""
+        target_dir = os.path.join(BASE_DIR, subfolder)
+        os.makedirs(target_dir, exist_ok=True)
+        zip_path = os.path.join(target_dir, f"{subfolder}_download.zip")
+
+        last_percent = {"value": -10}
+
+        def _progress(count, block_size, total_size):
+            if total_size <= 0:
+                return
+            percent = int(count * block_size * 100 / total_size)
+            if percent - last_percent["value"] >= 10:
+                last_percent["value"] = percent
+                self._log(f"Downloading {label}... {min(percent, 100)}%\n")
+
+        self._log(f"Downloading {label}...\n")
+        urllib.request.urlretrieve(url, zip_path, reporthook=_progress)
+        self._log(f"{label} download complete. Extracting...\n")
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(target_dir)
+        os.remove(zip_path)
+
+        for root_dir, _dirs, files in os.walk(target_dir):
+            if exe_name in files:
+                return os.path.join(root_dir, exe_name)
+        return None
 
     def _check_dependencies_ui(self):
         missing = []
         if shutil.which("yt-dlp") is None:
             missing.append("yt-dlp")
-        if shutil.which("ffmpeg") is None:
+        if not self._has_ffmpeg():
             missing.append("ffmpeg")
 
         if missing:
-            msg = f"Missing: {', '.join(missing)}. Install and add to PATH, then restart this app."
+            msg = f"Missing: {', '.join(missing)}. Click 'Auto Setup' below to install automatically."
             self.status_label.config(text=msg, foreground="red")
             self.download_btn.config(state="disabled")
+        elif not self._has_deno():
+            self.status_label.config(
+                text="Ready, but Deno is missing (some formats may be limited). Click 'Auto Setup' to install it.",
+                foreground="#b8860b",
+            )
+            self.download_btn.config(state="normal")
         else:
-            self.status_label.config(text="Ready.", foreground="green")
+            self.status_label.config(text="Ready. All tools verified.", foreground="green")
+            self.download_btn.config(state="normal")
 
     # ---------- File dialogs ----------
 
@@ -341,6 +411,12 @@ class DownloaderApp:
         if os.path.isfile(cookies):
             cmd += ["--cookies", cookies]
 
+        if shutil.which("ffmpeg") is None and self.ffmpeg_path.get():
+            cmd += ["--ffmpeg-location", os.path.dirname(self.ffmpeg_path.get())]
+
+        if shutil.which("deno") is None and self.deno_path.get():
+            cmd += ["--js-runtimes", f"deno:{self.deno_path.get()}"]
+
         cmd += [self._playlist_flag(link)]
 
         if self.restrict_filenames.get():
@@ -415,6 +491,101 @@ class DownloaderApp:
     def _download_finished(self):
         self.is_downloading = False
         self.download_btn.config(state="normal", text="Download")
+
+    # ---------- Auto Setup ----------
+
+    def _auto_setup(self):
+        self._open_log_window()
+        self._log("\n=== Starting Auto Setup ===\n")
+        self.setup_btn.config(state="disabled", text="Setting up...")
+        threading.Thread(target=self._auto_setup_worker, daemon=True).start()
+
+    def _auto_setup_worker(self):
+        # 1. yt-dlp via pip
+        if shutil.which("yt-dlp") is None:
+            self._log("yt-dlp not found. Installing via pip...\n")
+            try:
+                process = _popen(["pip", "install", "--upgrade", "yt-dlp"])
+                for line in process.stdout:
+                    self._log(line)
+                process.wait()
+                if process.returncode == 0:
+                    self._log("yt-dlp installed successfully.\n")
+                else:
+                    self._log(f"[WARNING] pip exited with code {process.returncode}\n")
+            except FileNotFoundError:
+                self._log("[ERROR] pip not found. Install Python from python.org first (it includes pip).\n")
+            except Exception as e:
+                self._log(f"[ERROR] Failed to install yt-dlp: {e}\n")
+        else:
+            self._log("yt-dlp already installed, skipping.\n")
+
+        # 2. ffmpeg, portable download, no PATH changes needed
+        if self._has_ffmpeg():
+            self._log("ffmpeg already available, skipping.\n")
+        else:
+            self._log("ffmpeg not found. Downloading a portable build (this can take a few minutes)...\n")
+            try:
+                found = self._download_portable_tool(FFMPEG_URL, "ffmpeg", "ffmpeg.exe", "ffmpeg")
+                if found:
+                    self.ffmpeg_path.set(found)
+                    self._save_settings()
+                    self._log(f"ffmpeg is ready at: {found}\n")
+                else:
+                    self._log("[ERROR] Downloaded ffmpeg but couldn't locate ffmpeg.exe inside it.\n")
+            except Exception as e:
+                self._log(f"[ERROR] Failed to set up ffmpeg: {e}\n")
+                self._log("You can still install ffmpeg manually from https://www.gyan.dev/ffmpeg/builds/\n")
+
+        # 3. Deno, needed for yt-dlp to solve YouTube's JS challenges
+        if self._has_deno():
+            self._log("Deno already available, skipping.\n")
+        else:
+            self._log("Deno not found. Downloading a portable build...\n")
+            try:
+                found = self._download_portable_tool(DENO_URL, "deno", "deno.exe", "Deno")
+                if found:
+                    self.deno_path.set(found)
+                    self._save_settings()
+                    self._log(f"Deno is ready at: {found}\n")
+                else:
+                    self._log("[ERROR] Downloaded Deno but couldn't locate deno.exe inside it.\n")
+            except Exception as e:
+                self._log(f"[ERROR] Failed to set up Deno: {e}\n")
+                self._log("You can still install Deno manually: winget install DenoLand.Deno\n")
+
+        # 4. Verify every tool actually runs, not just that files exist
+        self._log("\n--- Verifying setup ---\n")
+        self._verify_tool("yt-dlp", shutil.which("yt-dlp") or "yt-dlp")
+        self._verify_tool("ffmpeg", shutil.which("ffmpeg") or self.ffmpeg_path.get())
+        self._verify_tool("Deno", shutil.which("deno") or self.deno_path.get())
+
+        self._log("=== Auto Setup finished ===\n")
+        self.root.after(0, self._auto_setup_done)
+
+    def _verify_tool(self, label, path_or_cmd):
+        if not path_or_cmd:
+            self._log(f"[ERROR] {label}: not available, setup did not succeed.\n")
+            return
+        try:
+            process = _popen([path_or_cmd, "--version"])
+            output, _ = process.communicate(timeout=20)
+            process.wait()
+            first_line = (output or "").strip().splitlines()[0] if output and output.strip() else ""
+            if process.returncode == 0 or first_line:
+                self._log(f"[OK] {label}: {first_line if first_line else 'responded successfully'}\n")
+            else:
+                self._log(f"[WARNING] {label}: exited with code {process.returncode}, might not be working correctly.\n")
+        except FileNotFoundError:
+            self._log(f"[ERROR] {label}: executable not found at '{path_or_cmd}'.\n")
+        except subprocess.TimeoutExpired:
+            self._log(f"[ERROR] {label}: did not respond in time.\n")
+        except Exception as e:
+            self._log(f"[ERROR] {label}: verification failed ({e}).\n")
+
+    def _auto_setup_done(self):
+        self.setup_btn.config(state="normal", text="Auto Setup (yt-dlp + ffmpeg + Deno)")
+        self._check_dependencies_ui()
 
     def _update_ytdlp(self):
         self._open_log_window()

@@ -1,4 +1,4 @@
-# YouTube Audio Downloader
+# YouTube Audio Downloader With Cover Included
 
 A Windows batch script that downloads audio from YouTube and converts it to MP3, FLAC, or WAV, complete with embedded thumbnail art and artist metadata pulled from the channel name. Just double-click and go.
 

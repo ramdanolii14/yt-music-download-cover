@@ -17,7 +17,7 @@ import zipfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-APP_VERSION = "2.0"
+APP_VERSION = "1.0.0"
 GITHUB_REPO = "ramdanolii14/yt-music-download-cover"
 RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -158,6 +158,7 @@ class DownloaderApp:
         self.output_dir = tk.StringVar(value=BASE_DIR)
         self.cookies_path = tk.StringVar(value=os.path.join(BASE_DIR, "cookies.txt"))
         self.audio_format = tk.StringVar(value="mp3")
+        self.video_resolution = tk.StringVar(value="Best available")
         self.playlist_mode = tk.StringVar(value="auto")
         self.restrict_filenames = tk.BooleanVar(value=True)
         self.ffmpeg_path = tk.StringVar(value="")
@@ -173,6 +174,7 @@ class DownloaderApp:
 
         self._load_settings()
         self._build_ui()
+        self._on_format_change()
         self._apply_theme()
         self._check_dependencies_ui()
         self._show_page("home")
@@ -198,8 +200,11 @@ class DownloaderApp:
         if cookies and os.path.isfile(cookies):
             self.cookies_path.set(cookies)
 
-        if data.get("audio_format") in ("mp3", "flac", "wav"):
+        if data.get("audio_format") in ("mp3", "flac", "wav", "mp4"):
             self.audio_format.set(data["audio_format"])
+
+        if data.get("video_resolution"):
+            self.video_resolution.set(data["video_resolution"])
 
         if data.get("playlist_mode") in ("auto", "single video only", "full playlist"):
             self.playlist_mode.set(data["playlist_mode"])
@@ -223,6 +228,7 @@ class DownloaderApp:
             "output_dir": self.output_dir.get(),
             "cookies_path": self.cookies_path.get(),
             "audio_format": self.audio_format.get(),
+            "video_resolution": self.video_resolution.get(),
             "playlist_mode": self.playlist_mode.get(),
             "restrict_filenames": self.restrict_filenames.get(),
             "ffmpeg_path": self.ffmpeg_path.get(),
@@ -365,14 +371,30 @@ class DownloaderApp:
         row3 = ttk.Frame(opt_frame)
         row3.pack(fill="x", padx=8, pady=6)
         ttk.Label(row3, text="Format:").pack(side="left")
-        ttk.Combobox(
-            row3, textvariable=self.audio_format, values=["mp3", "flac", "wav"], width=8, state="readonly"
-        ).pack(side="left", padx=(6, 20))
+        self.format_combo = ttk.Combobox(
+            row3, textvariable=self.audio_format, values=["mp3", "flac", "wav", "mp4"], width=8, state="readonly"
+        )
+        self.format_combo.pack(side="left", padx=(6, 20))
+        self.format_combo.bind("<<ComboboxSelected>>", self._on_format_change)
         ttk.Label(row3, text="Playlist:").pack(side="left")
         ttk.Combobox(
             row3, textvariable=self.playlist_mode,
             values=["auto", "single video only", "full playlist"], width=18, state="readonly"
         ).pack(side="left", padx=6)
+
+        row3b = ttk.Frame(opt_frame)
+        row3b.pack(fill="x", padx=8, pady=(0, 6))
+        ttk.Label(row3b, text="Resolution:").pack(side="left")
+        self.resolution_combo = ttk.Combobox(
+            row3b, textvariable=self.video_resolution, values=["Best available"], width=16, state="disabled"
+        )
+        self.resolution_combo.pack(side="left", padx=6)
+        self.resolution_hint = ttk.Label(
+            row3b, text="(MP4 only — click Preview on Home to load resolutions for that video)",
+            foreground="gray"
+        )
+        self.resolution_hint.pack(side="left", padx=(8, 0))
+
         row4 = ttk.Frame(opt_frame)
         row4.pack(fill="x", padx=8, pady=(0, 6))
         ttk.Checkbutton(
@@ -406,6 +428,13 @@ class DownloaderApp:
         self.update_status_label.pack(anchor="w", padx=8, pady=(0, 8))
 
     # ---------- Theme ----------
+
+    def _on_format_change(self, event=None):
+        if self.audio_format.get() == "mp4":
+            self.resolution_combo.config(state="readonly")
+        else:
+            self.resolution_combo.config(state="disabled")
+        self._save_settings()
 
     def _toggle_dark_mode(self):
         self._save_settings()
@@ -608,10 +637,29 @@ class DownloaderApp:
             channel = data.get("channel") or data.get("uploader") or "Unknown channel"
             duration = data.get("duration_string") or ""
 
+            heights = set()
+            for fmt in data.get("formats", []):
+                h = fmt.get("height")
+                vcodec = fmt.get("vcodec")
+                if h and vcodec and vcodec != "none":
+                    heights.add(int(h))
+            resolution_labels = ["Best available"] + [f"{h}p" for h in sorted(heights, reverse=True)]
+
             def update_ui():
                 self.preview_title.set(f"Title: {title}")
                 self.preview_channel.set(f"Channel: {channel}")
                 self.preview_duration.set(f"Duration: {duration}" if duration else "")
+
+                if hasattr(self, "resolution_combo"):
+                    self.resolution_combo["values"] = resolution_labels
+                    if self.video_resolution.get() not in resolution_labels:
+                        self.video_resolution.set(resolution_labels[0])
+                    if self.audio_format.get() == "mp4":
+                        self.resolution_combo.config(state="readonly")
+                    if len(resolution_labels) > 1 and hasattr(self, "resolution_hint"):
+                        self.resolution_hint.config(
+                            text=f"({len(resolution_labels) - 1} resolutions available for this video)"
+                        )
 
             self.root.after(0, update_ui)
         except Exception as e:
@@ -667,15 +715,39 @@ class DownloaderApp:
             "--embed-metadata",
             "--parse-metadata", "%(channel)s:%(artist)s",
             "--parse-metadata", "%(channel)s:%(album_artist)s",
-            "-f", "bestaudio",
-            "--extract-audio",
-            "--audio-format", audioformat,
-            "--audio-quality", "0",
+        ]
+
+        if audioformat == "mp4":
+            cmd += [
+                "-f", self._video_format_selector(),
+                "--merge-output-format", "mp4",
+            ]
+        else:
+            cmd += [
+                "-f", "bestaudio",
+                "--extract-audio",
+                "--audio-format", audioformat,
+                "--audio-quality", "0",
+            ]
+
+        cmd += [
             "--retries", "5",
             "--sleep-requests", "1",
             "-o", os.path.join(out_dir, "%(title)s.%(ext)s"),
         ]
         return cmd
+
+    def _video_format_selector(self):
+        """Build a yt-dlp format selector from the resolution the user picked after
+        previewing the actual video. Never hardcodes a resolution — if nothing has
+        been fetched yet, or 'Best available' is selected, it just asks for the best."""
+        label = self.video_resolution.get()
+        if not label or label == "Best available":
+            return "bestvideo+bestaudio/best"
+        height = "".join(ch for ch in label if ch.isdigit())
+        if not height:
+            return "bestvideo+bestaudio/best"
+        return f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
 
     def _start_download(self):
         if self.is_downloading:
